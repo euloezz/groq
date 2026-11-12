@@ -3,20 +3,8 @@ import pandas as pd
 import plotly.express as px
 from openai import OpenAI
 
-# Layout wide para permitir controle fino das colunas
+# Configuração da página em modo wide
 st.set_page_config(page_title="Chatbot Didático: Groq + RAG + CSV", page_icon="🤖", layout="wide")
-
-# CSS para alinhar o st.chat_input exatamente na largura e posição da coluna central (60% do total)
-st.markdown("""
-<style>
-    /* Trava o chat_input na largura da coluna do meio e centraliza */
-    [data-testid="stChatInput"] {
-        max-width: 60% !important;
-        margin-left: auto !important;
-        margin-right: auto !important;
-    }
-</style>
-""", unsafe_allow_html=True)
 
 st.title("🤖 Laboratório de IA: Chatbot, RAG & Análise de CSV com Groq")
 
@@ -25,14 +13,9 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 
 # ==============================================================================
-# PROPORÇÃO DAS COLUNAS: LATERAIS (0.8) E CHAT EXPANDIDO (2.4)
+# BARRA LATERAL (SIDEBAR): CONTROLOS, API, PERSONA E UPLOAD
 # ==============================================================================
-col_controles, col_chat, col_preview = st.columns([0.8, 2.4, 0.8], gap="medium")
-
-# ==============================================================================
-# 1. COLUNA DA ESQUERDA: API, PERSONA, UPLOAD E CONTROLES
-# ==============================================================================
-with col_controles:
+with st.sidebar:
     st.subheader("⚙️ Controles")
 
     # Bloco API
@@ -77,7 +60,7 @@ with col_controles:
             st.error(f"Erro: {e}")
             client = None
     else:
-        st.info("Cole sua chave acima.")
+        st.info("Cole sua chave acima na barra lateral.")
 
     st.markdown("---")
 
@@ -118,4 +101,124 @@ with col_controles:
 
     st.markdown("---")
 
-    # Bot
+    # Botão de Limpar Histórico
+    if st.button("🧹 Limpar Histórico", use_container_width=True):
+        st.session_state.messages = []
+        st.rerun()
+
+# ==============================================================================
+# ÁREA PRINCIPAL: DIVIDIDA EM DUAS COLUNAS (CHAT E VISUALIZAÇÃO/GRÁFICOS)
+# ==============================================================================
+col_chat, col_preview = st.columns(spec=[1.2, 1.8], gap="medium")
+
+# 1. Coluna do Chat
+with col_chat:
+    st.subheader("💬 Diálogo")
+    chat_container = st.container(height=550)
+    
+    with chat_container:
+        for message in st.session_state.messages:
+            with st.chat_message(message["role"]):
+                st.write(message["content"])
+
+# 2. Coluna de Visualização, Estatísticas e Gráficos Plotly
+with col_preview:
+    st.subheader("📊 Visualização & Gráficos")
+    
+    if arquivo_enviado:
+        st.caption(f"Arquivo ativo: **{arquivo_enviado.name}**")
+        
+        if df_dados is not None:
+            tab_tabela, tab_stats, tab_graficos = st.tabs(["Tabela", "Estatísticas", "Gráficos"])
+            
+            with tab_tabela:
+                st.dataframe(df_dados, height=450, use_container_width=True)
+            
+            with tab_stats:
+                st.write(df_dados.describe())
+            
+            with tab_graficos:
+                st.markdown("##### 📈 Análise Visual Avançada (Plotly)")
+                colunas_numericas = df_dados.select_dtypes(include=["number"]).columns.tolist()
+                colunas_todas = df_dados.columns.tolist()
+                
+                if colunas_numericas and len(colunas_todas) >= 2:
+                    tipo_grafico_avancado = st.selectbox(
+                        "Selecione o tipo de gráfico:", 
+                        ["Gráfico de Barras", "Gráfico de Dispersão (Scatter)", "Gráfico de Linha", "Histograma"]
+                    )
+                    
+                    col_x = st.selectbox("Eixo X:", colunas_todas, index=0)
+                    col_y = st.selectbox("Eixo Y (Métrica):", colunas_numericas, index=0)
+                    
+                    if tipo_grafico_avancado == "Gráfico de Barras":
+                        fig = px.bar(df_dados, x=col_x, y=col_y, title=f"{col_y} por {col_x}")
+                        st.plotly_chart(fig, use_container_width=True)
+                    elif tipo_grafico_avancado == "Gráfico de Dispersão (Scatter)":
+                        fig = px.scatter(df_dados, x=col_x, y=col_y, title=f"Dispersão: {col_y} vs {col_x}")
+                        st.plotly_chart(fig, use_container_width=True)
+                    elif tipo_grafico_avancado == "Gráfico de Linha":
+                        fig = px.line(df_dados, x=col_x, y=col_y, title=f"Evolução de {col_y} por {col_x}", markers=True)
+                        st.plotly_chart(fig, use_container_width=True)
+                    elif tipo_grafico_avancado == "Histograma":
+                        fig = px.histogram(df_dados, x=col_y, title=f"Distribuição de {col_y}")
+                        st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("O dataset precisa de pelo menos uma coluna numérica para gerar gráficos.")
+        else:
+            st.text_area(label="Conteúdo em memória:", value=conteudo_documento, height=480, disabled=True)
+    else:
+        st.info("👈 Faça o upload de um arquivo CSV ou TXT na barra lateral para começar a visualizar os dados e gráficos.")
+
+# ==============================================================================
+# CAMPO DE ENTRADA DO CHAT
+# ==============================================================================
+if user_input := st.chat_input("Faça sua pergunta sobre os dados ou converse com o bot..."):
+    if not client or not modelo_selecionado:
+        st.warning("⚠️ Insira uma chave de API válida na barra lateral antes de enviar perguntas.")
+        st.stop()
+
+    st.session_state.messages.append({"role": "user", "content": user_input})
+    with chat_container:
+        with st.chat_message("user"):
+            st.write(user_input)
+
+    # Constrói o System Prompt (Persona + Contexto RAG estruturado)
+    mensagens_api = []
+    prompt_sistema = f"### IDENTIDADE E REGRAS DA PERSONA:\n{persona_customizada.strip()}\n\n"
+
+    if conteudo_documento:
+        prompt_sistema += (
+            "### REGRAS ESPECÍFICAS DE CONSULTA (RAG / DADOS):\n"
+            "1. Responda à dúvida do usuário usando EXCLUSIVAMENTE os dados contidos no documento/dataset abaixo.\n"
+            "2. Seja analítico, preciso e direto ao responder.\n"
+            "3. Se a informação solicitada não constar no documento, responda estritamente: "
+            "'A informação solicitada não consta no documento fornecido.'\n\n"
+            f"--- INÍCIO DOS DADOS ---\n{conteudo_documento}\n--- FIM DOS DADOS ---"
+        )
+    else:
+        prompt_sistema += "Responda de forma clara, objetiva e coerente com sua persona."
+
+    mensagens_api.append({"role": "system", "content": prompt_sistema})
+
+    for m in st.session_state.messages:
+        mensagens_api.append({"role": m["role"], "content": m["content"]})
+
+    # Chamada à API da Groq
+    try:
+        with chat_container:
+            with st.spinner("Processando resposta..."):
+                response = client.chat.completions.create(
+                    model=modelo_selecionado,
+                    messages=mensagens_api,
+                    temperature=0.1 if conteudo_documento else 0.7,
+                    max_tokens=500
+                )
+                resposta = response.choices[0].message.content
+
+            st.session_state.messages.append({"role": "assistant", "content": resposta})
+            with st.chat_message("assistant"):
+                st.write(resposta)
+
+    except Exception as e:
+        st.error(f"Erro na geração da resposta: {e}")
